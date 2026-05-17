@@ -400,11 +400,6 @@ jobs:
             --config Release `
             --target $targets
 
-      - name: Run tests (windows msvc)
-        if: runner.os == 'Windows' && inputs.run-tests
-        run: |
-          & "${{ github.workspace }}/out/build/windows-tiles-sounds-x64-msvc/tests/cata_test-tiles.exe" --rng-seed time
-
       - name: Create distribution package (windows msvc)
         if: runner.os == 'Windows' && inputs.package-artifacts && (!inputs.upload-artifacts || matrix.upload-artifact == true)
         run: |
@@ -510,6 +505,11 @@ jobs:
           name: ${{ matrix.artifact }}
           path: cbn-${{ matrix.artifact }}-${{ inputs.version-label }}.${{ matrix.ext }}
           if-no-files-found: error
+
+      - name: Run tests (windows msvc)
+        if: runner.os == 'Windows' && inputs.run-tests
+        run: |
+          & "${{ github.workspace }}/out/build/windows-tiles-sounds-x64-msvc/tests/cata_test-tiles.exe" --rng-seed time
 
       - name: Upload to release
         if: inputs.upload-to-release
