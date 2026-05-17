@@ -30,7 +30,8 @@ jobs:
           pr_number=$(jq -r '.workflow_run.pull_requests[0].number // empty' "$GITHUB_EVENT_PATH")
 
           if [ -z "$pr_number" ]; then
-            pr_number=$(gh api "repos/${REPOSITORY}/commits/${HEAD_SHA}/pulls" --jq 'map(select(.state == "open" and .base.ref == "main"))[0].number // empty')
+            pr_number=$(gh api "repos/${REPOSITORY}/pulls?state=open&base=main&per_page=100" \
+              --jq "map(select(.head.sha == \"${HEAD_SHA}\"))[0].number // empty")
           fi
 
           if [ -z "$pr_number" ]; then
