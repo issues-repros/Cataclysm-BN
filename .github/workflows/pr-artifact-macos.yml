@@ -1,0 +1,30 @@
+name: PR Artifact macOS
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore: [docs/**, doxygen_doc/**, lgtm/**, utilities/**, scripts/**, "**.md", "**.mdx"]
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-artifact-macos-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      version-label: pr-${{ github.event.pull_request.number || github.run_id }}
+      mode: release
+      matrix-json: |
+        [
+          { "name": "macOS Tiles", "platform": "macos", "artifact": "osx-tiles-x64", "os": "macos-15-intel", "preset": "osx-tiles-x64-dist", "tiles": true, "sound": true, "ext": "dmg", "content-type": "application/x-apple-diskimage" }
+        ]
+      download-translations: false
+      package-artifacts: true
+      run-tests: false
+      upload-artifacts: true

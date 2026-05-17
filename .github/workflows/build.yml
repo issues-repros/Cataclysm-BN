@@ -59,6 +59,11 @@ on:
         required: false
         type: boolean
         default: false
+      upload-artifacts:
+        description: "Upload packaged build files as workflow artifacts"
+        required: false
+        type: boolean
+        default: false
       release-tag:
         description: "Release tag to upload to (empty for experimental)"
         required: false
@@ -496,6 +501,14 @@ jobs:
           fi
 
       # Upload artifacts
+      - name: Upload packaged build artifact
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@v4.6.0
+        with:
+          name: ${{ matrix.artifact }}
+          path: cbn-${{ matrix.artifact }}-${{ inputs.version-label }}.${{ matrix.ext }}
+          if-no-files-found: error
+
       - name: Upload to release
         if: inputs.upload-to-release
         run: |
