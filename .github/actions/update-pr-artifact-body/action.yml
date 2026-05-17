@@ -31,11 +31,21 @@ runs:
 
         tag="pr-${PR_NUMBER}"
         release_base="https://github.com/${REPOSITORY}/releases/download/${tag}"
+        workflow_file="pr-artifacts.yml"
+
+        run_json=$(gh api \
+          "repos/${REPOSITORY}/actions/workflows/${workflow_file}/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=1" \
+          --jq '.workflow_runs[0] // {}')
+        run_url=$(jq -r '.html_url // empty' <<<"$run_json")
+        status=$(jq -r '.status // empty' <<<"$run_json")
+
+        if [ -z "$run_url" ]; then
+          run_url="https://github.com/${REPOSITORY}/actions/workflows/${workflow_file}"
+        fi
 
         artifact_state() {
           local label="$1"
           local asset="$2"
-          local workflow_file="$3"
 
           local asset_name
           asset_name=$(gh release view "$tag" --repo "$REPOSITORY" --json assets \
@@ -45,21 +55,7 @@ runs:
             return
           fi
 
-          local run_json
-          run_json=$(gh api \
-            "repos/${REPOSITORY}/actions/workflows/${workflow_file}/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=1" \
-            --jq '.workflow_runs[0] // {}')
-
-          local run_url status conclusion
-          run_url=$(jq -r '.html_url // empty' <<<"$run_json")
-          status=$(jq -r '.status // empty' <<<"$run_json")
-          conclusion=$(jq -r '.conclusion // empty' <<<"$run_json")
-
-          if [ -z "$run_url" ]; then
-            run_url="https://github.com/${REPOSITORY}/actions/workflows/${workflow_file}"
-          fi
-
-          if [ "$status" = "completed" ] && [ "$conclusion" != "success" ]; then
+          if [ "$status" = "completed" ]; then
             printf -- '- [❌ %s — build failed](%s)\n' "$label" "$run_url"
           else
             printf -- '- [⌛ %s — building](%s)\n' "$label" "$run_url"
@@ -76,10 +72,10 @@ runs:
 
         ## Build Artifacts
 
-        $(artifact_state "Linux tiles" "$linux_asset" "pr-artifact-linux.yml")
-        $(artifact_state "Windows tiles" "$windows_asset" "pr-artifact-windows.yml")
-        $(artifact_state "macOS tiles" "$macos_asset" "pr-artifact-macos.yml")
-        $(artifact_state "Android tiles" "$android_asset" "pr-artifact-android.yml")
+        $(artifact_state "Linux tiles" "$linux_asset")
+        $(artifact_state "Windows tiles" "$windows_asset")
+        $(artifact_state "macOS tiles" "$macos_asset")
+        $(artifact_state "Android tiles" "$android_asset")
         <!-- END artifact comment -->
         EOF
         )
