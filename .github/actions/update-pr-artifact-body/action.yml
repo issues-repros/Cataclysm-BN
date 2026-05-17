@@ -9,11 +9,11 @@ inputs:
   pr-number:
     description: Pull request number
     required: true
-  head-sha:
-    description: Pull request head commit SHA
+  content:
+    description: Markdown content to place between artifact comment markers
     required: true
   token:
-    description: GitHub token with pull-requests:write and actions:read
+    description: GitHub token with pull-requests:write
     required: true
 
 runs:
@@ -25,57 +25,14 @@ runs:
         GH_TOKEN: ${{ inputs.token }}
         REPOSITORY: ${{ inputs.repository }}
         PR_NUMBER: ${{ inputs.pr-number }}
-        HEAD_SHA: ${{ inputs.head-sha }}
+        CONTENT: ${{ inputs.content }}
       run: |
         set -euo pipefail
-
-        tag="pr-${PR_NUMBER}"
-        release_base="https://github.com/${REPOSITORY}/releases/download/${tag}"
-        workflow_file="pr-artifacts.yml"
-
-        run_json=$(gh api \
-          "repos/${REPOSITORY}/actions/workflows/${workflow_file}/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=1" \
-          --jq '.workflow_runs[0] // {}')
-        run_url=$(jq -r '.html_url // empty' <<<"$run_json")
-        status=$(jq -r '.status // empty' <<<"$run_json")
-
-        if [ -z "$run_url" ]; then
-          run_url="https://github.com/${REPOSITORY}/actions/workflows/${workflow_file}"
-        fi
-
-        artifact_state() {
-          local label="$1"
-          local asset="$2"
-
-          local asset_name
-          asset_name=$(gh release view "$tag" --repo "$REPOSITORY" --json assets \
-            --jq ".assets[] | select(.name == \"${asset}\") | .name" 2>/dev/null || true)
-          if [ "$asset_name" = "$asset" ]; then
-            printf -- '- [✅ %s — download](%s/%s)\n' "$label" "$release_base" "$asset"
-            return
-          fi
-
-          if [ "$status" = "completed" ]; then
-            printf -- '- [❌ %s — build failed](%s)\n' "$label" "$run_url"
-          else
-            printf -- '- [⌛ %s — building](%s)\n' "$label" "$run_url"
-          fi
-        }
-
-        linux_asset="cbn-linux-tiles-x64-${tag}.tar.gz"
-        windows_asset="cbn-windows-tiles-x64-msvc-${tag}.zip"
-        macos_asset="cbn-osx-tiles-x64-${tag}.dmg"
-        android_asset="cbn-android-x64-${tag}.apk"
 
         block=$(cat <<EOF
         <!-- BEGIN artifact comment -->
 
-        ## Build Artifacts
-
-        $(artifact_state "Linux tiles" "$linux_asset")
-        $(artifact_state "Windows tiles" "$windows_asset")
-        $(artifact_state "macOS tiles" "$macos_asset")
-        $(artifact_state "Android tiles" "$android_asset")
+        ${CONTENT}
         <!-- END artifact comment -->
         EOF
         )

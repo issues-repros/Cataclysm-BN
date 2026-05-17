@@ -1,115 +1,146 @@
 name: PR Artifact Publisher
 
 on:
-  pull_request_target:
-    branches: [main]
-    paths-ignore: [docs/**, doxygen_doc/**, lgtm/**, utilities/**, scripts/**, "**.md", "**.mdx"]
-    types: [opened, reopened, synchronize, ready_for_review]
   workflow_run:
-    workflows: [PR Artifacts]
+    workflows: [linux, other]
     types: [completed]
 
 permissions:
   actions: read
-  contents: write
+  contents: read
   pull-requests: write
 
 concurrency:
-  group: pr-artifact-publish-${{ github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha }}
+  group: pr-artifact-publish-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
   publish:
-    if: ${{ github.event_name == 'pull_request_target' || github.event.workflow_run.event == 'pull_request' }}
+    if: github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Resolve pull request metadata
         id: pr
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          EVENT_PATH: ${{ github.event_path }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "pull_request_target" ]; then
-            pr_number=$(jq -r '.pull_request.number' "$EVENT_PATH")
-            head_sha=$(jq -r '.pull_request.head.sha' "$EVENT_PATH")
-          else
-            pr_number=$(jq -r '.workflow_run.pull_requests[0].number // empty' "$EVENT_PATH")
-            head_sha=$(jq -r '.workflow_run.head_sha' "$EVENT_PATH")
+          pr_number=$(jq -r '.workflow_run.pull_requests[0].number // empty' "$GITHUB_EVENT_PATH")
+
+          if [ -z "$pr_number" ]; then
+            pr_number=$(gh api "repos/${REPOSITORY}/commits/${HEAD_SHA}/pulls" --jq 'map(select(.state == "open" and .base.ref == "main"))[0].number // empty')
           fi
 
-          if [ -z "$pr_number" ] && [ -n "$head_sha" ]; then
-            pr_number=$(gh api "repos/${REPOSITORY}/commits/${head_sha}/pulls" --jq 'map(select(.state == "open" and .base.ref == "main"))[0].number // empty')
-          fi
-
-          if [ -z "$pr_number" ] || [ -z "$head_sha" ]; then
+          if [ -z "$pr_number" ]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           current_head=$(gh api "repos/${REPOSITORY}/pulls/${pr_number}" --jq '.head.sha')
-          if [ "$current_head" != "$head_sha" ]; then
+          if [ "$current_head" != "$HEAD_SHA" ]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "found=true" >> "$GITHUB_OUTPUT"
           echo "number=$pr_number" >> "$GITHUB_OUTPUT"
-          echo "head-sha=$head_sha" >> "$GITHUB_OUTPUT"
-          echo "tag=pr-${pr_number}" >> "$GITHUB_OUTPUT"
+          echo "head-sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Check out workflow actions
+      - name: Read completed artifact workflow runs
+        id: runs
         if: steps.pr.outputs.found == 'true'
-        uses: actions/checkout@v4
-
-      - name: Reset stale release assets for this PR build
-        if: steps.pr.outputs.found == 'true' && github.event_name == 'pull_request_target'
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          TAG: ${{ steps.pr.outputs.tag }}
-        run: gh release delete "$TAG" --repo "$REPOSITORY" --cleanup-tag --yes || true
-
-      - name: Publish completed workflow artifacts to the PR release
-        if: steps.pr.outputs.found == 'true' && github.event_name == 'workflow_run'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
           HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
-          TAG: ${{ steps.pr.outputs.tag }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          artifact_dir="$RUNNER_TEMP/pr-artifacts"
-          mkdir -p "$artifact_dir"
-          gh run download "$RUN_ID" --repo "$REPOSITORY" --dir "$artifact_dir" || true
 
-          mapfile -t assets < <(find "$artifact_dir" -type f \( -name 'cbn-*.tar.gz' -o -name 'cbn-*.zip' -o -name 'cbn-*.dmg' -o -name 'cbn-*.apk' \))
-          if [ "${#assets[@]}" -eq 0 ]; then
-            echo "No packaged PR artifacts were uploaded by run $RUN_ID"
+          run_for_workflow() {
+            local workflow_file="$1"
+            gh api "repos/${REPOSITORY}/actions/workflows/${workflow_file}/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=1" \
+              --jq '.workflow_runs[0] // {}'
+          }
+
+          linux_run=$(run_for_workflow matrix.yml)
+          other_run=$(run_for_workflow platform-ci.yml)
+
+          linux_status=$(jq -r '.status // empty' <<<"$linux_run")
+          other_status=$(jq -r '.status // empty' <<<"$other_run")
+
+          if [ "$linux_status" != "completed" ] || [ "$other_status" != "completed" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if ! gh release view "$TAG" --repo "$REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --repo "$REPOSITORY" \
-              --title "PR #${PR_NUMBER} build ${HEAD_SHA:0:7}" \
-              --notes "Downloadable playtest builds for PR #${PR_NUMBER} at ${HEAD_SHA}." \
-              --prerelease \
-              --target "$DEFAULT_BRANCH"
-          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "linux-id=$(jq -r '.id' <<<"$linux_run")" >> "$GITHUB_OUTPUT"
+          echo "linux-url=$(jq -r '.html_url' <<<"$linux_run")" >> "$GITHUB_OUTPUT"
+          echo "other-id=$(jq -r '.id' <<<"$other_run")" >> "$GITHUB_OUTPUT"
+          echo "other-url=$(jq -r '.html_url' <<<"$other_run")" >> "$GITHUB_OUTPUT"
 
-          gh release upload "$TAG" "${assets[@]}" --repo "$REPOSITORY" --clobber
+      - name: Build artifact block
+        id: body
+        if: steps.runs.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          LINUX_RUN_ID: ${{ steps.runs.outputs.linux-id }}
+          LINUX_RUN_URL: ${{ steps.runs.outputs.linux-url }}
+          OTHER_RUN_ID: ${{ steps.runs.outputs.other-id }}
+          OTHER_RUN_URL: ${{ steps.runs.outputs.other-url }}
+        run: |
+          set -euo pipefail
+
+          artifact_url() {
+            local run_id="$1"
+            local artifact_name="$2"
+            local artifact_id
+            artifact_id=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}/artifacts?name=${artifact_name}" \
+              --jq '.artifacts[0] | select(.expired == false) | .id // empty')
+            if [ -n "$artifact_id" ]; then
+              printf 'https://github.com/%s/actions/runs/%s/artifacts/%s' "$REPOSITORY" "$run_id" "$artifact_id"
+            fi
+          }
+
+          artifact_line() {
+            local label="$1"
+            local url="$2"
+            local run_url="$3"
+            if [ -n "$url" ]; then
+              printf -- '- [✅ %s — download](%s)\n' "$label" "$url"
+            else
+              printf -- '- [❌ %s — build failed](%s)\n' "$label" "$run_url"
+            fi
+          }
+
+          linux_url=$(artifact_url "$LINUX_RUN_ID" linux-tiles-x64)
+          windows_url=$(artifact_url "$OTHER_RUN_ID" windows-tiles-x64-msvc)
+          macos_url=$(artifact_url "$OTHER_RUN_ID" osx-tiles-x64)
+          android_url=$(artifact_url "$OTHER_RUN_ID" android-x64)
+
+          {
+            echo 'content<<EOF'
+            echo '## Build Artifacts'
+            echo
+            artifact_line 'Linux tiles' "$linux_url" "$LINUX_RUN_URL"
+            artifact_line 'Windows tiles' "$windows_url" "$OTHER_RUN_URL"
+            artifact_line 'macOS tiles' "$macos_url" "$OTHER_RUN_URL"
+            artifact_line 'Android tiles' "$android_url" "$OTHER_RUN_URL"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out workflow actions
+        if: steps.runs.outputs.ready == 'true'
+        uses: actions/checkout@v4
 
       - name: Update pull request body
-        if: steps.pr.outputs.found == 'true'
+        if: steps.runs.outputs.ready == 'true'
         uses: ./.github/actions/update-pr-artifact-body
         with:
           repository: ${{ github.repository }}
           pr-number: ${{ steps.pr.outputs.number }}
-          head-sha: ${{ steps.pr.outputs.head-sha }}
+          content: ${{ steps.body.outputs.content }}
           token: ${{ github.token }}

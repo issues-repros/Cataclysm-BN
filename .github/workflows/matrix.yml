@@ -166,12 +166,21 @@ jobs:
               done
           fi
 
-      - name: emit success artifact
+      - name: create Linux tiles playtest package
+        if: ${{ success() && matrix.upload-artifact == 'true' }}
+        env:
+          VERSION_LABEL: pr-${{ github.event.pull_request.number || github.run_id }}
+        run: |
+          cmake --install build --prefix cataclysmbn-${VERSION_LABEL}
+          tar -czvf cbn-linux-tiles-x64-${VERSION_LABEL}.tar.gz cataclysmbn-${VERSION_LABEL}
+
+      - name: upload Linux tiles playtest package
         if: ${{ success() && matrix.upload-artifact == 'true' }}
         uses: actions/upload-artifact@v4.6.0
         with:
-          name: ${{ github.event.number }}
-          path: ${{ github.event.number }}
+          name: linux-tiles-x64
+          path: cbn-linux-tiles-x64-pr-${{ github.event.pull_request.number || github.run_id }}.tar.gz
+          if-no-files-found: error
 
       - name: upload artifacts if failed
         uses: actions/upload-artifact@v4.6.0
