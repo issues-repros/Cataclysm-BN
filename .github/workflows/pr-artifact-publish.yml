@@ -2,7 +2,7 @@ name: PR Artifact Publisher
 
 on:
   workflow_run:
-    workflows: [linux, other]
+    workflows: [other]
     types: [completed]
 
 permissions:
@@ -47,98 +47,60 @@ jobs:
 
           echo "found=true" >> "$GITHUB_OUTPUT"
           echo "number=$pr_number" >> "$GITHUB_OUTPUT"
-          echo "head-sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Read completed artifact workflow runs
-        id: runs
+      - name: Build artifact block
+        id: body
         if: steps.pr.outputs.found == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          HEAD_SHA: ${{ steps.pr.outputs.head-sha }}
-        run: |
-          set -euo pipefail
-
-          run_for_workflow() {
-            local workflow_file="$1"
-            gh api "repos/${REPOSITORY}/actions/workflows/${workflow_file}/runs?event=pull_request&head_sha=${HEAD_SHA}&per_page=1" \
-              --jq '.workflow_runs[0] // {}'
-          }
-
-          linux_run=$(run_for_workflow matrix.yml)
-          other_run=$(run_for_workflow platform-ci.yml)
-
-          linux_status=$(jq -r '.status // empty' <<<"$linux_run")
-          other_status=$(jq -r '.status // empty' <<<"$other_run")
-
-          if [ "$linux_status" != "completed" ] || [ "$other_status" != "completed" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "ready=true" >> "$GITHUB_OUTPUT"
-          echo "linux-id=$(jq -r '.id' <<<"$linux_run")" >> "$GITHUB_OUTPUT"
-          echo "linux-url=$(jq -r '.html_url' <<<"$linux_run")" >> "$GITHUB_OUTPUT"
-          echo "other-id=$(jq -r '.id' <<<"$other_run")" >> "$GITHUB_OUTPUT"
-          echo "other-url=$(jq -r '.html_url' <<<"$other_run")" >> "$GITHUB_OUTPUT"
-
-      - name: Build artifact block
-        id: body
-        if: steps.runs.outputs.ready == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          LINUX_RUN_ID: ${{ steps.runs.outputs.linux-id }}
-          LINUX_RUN_URL: ${{ steps.runs.outputs.linux-url }}
-          OTHER_RUN_ID: ${{ steps.runs.outputs.other-id }}
-          OTHER_RUN_URL: ${{ steps.runs.outputs.other-url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           set -euo pipefail
 
           artifact_url() {
-            local run_id="$1"
-            local artifact_name="$2"
+            local artifact_name="$1"
             local artifact_id
-            artifact_id=$(gh api "repos/${REPOSITORY}/actions/runs/${run_id}/artifacts?name=${artifact_name}" \
+            artifact_id=$(gh api "repos/${REPOSITORY}/actions/runs/${RUN_ID}/artifacts?name=${artifact_name}" \
               --jq '.artifacts[0] | select(.expired == false) | .id // empty')
             if [ -n "$artifact_id" ]; then
-              printf 'https://github.com/%s/actions/runs/%s/artifacts/%s' "$REPOSITORY" "$run_id" "$artifact_id"
+              printf 'https://github.com/%s/actions/runs/%s/artifacts/%s' "$REPOSITORY" "$RUN_ID" "$artifact_id"
             fi
           }
 
           artifact_line() {
             local label="$1"
             local url="$2"
-            local run_url="$3"
             if [ -n "$url" ]; then
               printf -- '- [✅ %s — download](%s)\n' "$label" "$url"
             else
-              printf -- '- [❌ %s — build failed](%s)\n' "$label" "$run_url"
+              printf -- '- [❌ %s — build failed](%s)\n' "$label" "$RUN_URL"
             fi
           }
 
-          linux_url=$(artifact_url "$LINUX_RUN_ID" linux-tiles-x64)
-          windows_url=$(artifact_url "$OTHER_RUN_ID" windows-tiles-x64-msvc)
-          macos_url=$(artifact_url "$OTHER_RUN_ID" osx-tiles-x64)
-          android_url=$(artifact_url "$OTHER_RUN_ID" android-x64)
+          linux_url=$(artifact_url linux-tiles-x64)
+          windows_url=$(artifact_url windows-tiles-x64-msvc)
+          macos_url=$(artifact_url osx-tiles-x64)
+          android_url=$(artifact_url android-x64)
 
           {
             echo 'content<<EOF'
             echo '## Build Artifacts'
             echo
-            artifact_line 'Linux tiles' "$linux_url" "$LINUX_RUN_URL"
-            artifact_line 'Windows tiles' "$windows_url" "$OTHER_RUN_URL"
-            artifact_line 'macOS tiles' "$macos_url" "$OTHER_RUN_URL"
-            artifact_line 'Android tiles' "$android_url" "$OTHER_RUN_URL"
+            artifact_line 'Linux tiles' "$linux_url"
+            artifact_line 'Windows tiles' "$windows_url"
+            artifact_line 'macOS tiles' "$macos_url"
+            artifact_line 'Android tiles' "$android_url"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
       - name: Check out workflow actions
-        if: steps.runs.outputs.ready == 'true'
+        if: steps.pr.outputs.found == 'true'
         uses: actions/checkout@v4
 
       - name: Update pull request body
-        if: steps.runs.outputs.ready == 'true'
+        if: steps.pr.outputs.found == 'true'
         uses: ./.github/actions/update-pr-artifact-body
         with:
           repository: ${{ github.repository }}
