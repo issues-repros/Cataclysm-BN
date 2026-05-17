@@ -348,6 +348,7 @@ jobs:
       - name: Create distribution package (Linux)
         if: runner.os == 'Linux' && (matrix.android == '' || matrix.android == 'none') && inputs.package-artifacts && (!inputs.upload-artifacts || matrix.upload-artifact == true)
         run: |
+          mkdir -p lang/mo
           cmake --install build --prefix cataclysmbn-${{ inputs.version-label }}
           tar -czvf cbn-${{ matrix.artifact }}-${{ inputs.version-label }}.tar.gz \
             cataclysmbn-${{ inputs.version-label }}
@@ -407,6 +408,7 @@ jobs:
       - name: Create distribution package (windows msvc)
         if: runner.os == 'Windows' && inputs.package-artifacts && (!inputs.upload-artifacts || matrix.upload-artifact == true)
         run: |
+          New-Item -ItemType Directory -Force lang/mo
           cmake --install out/build/windows-tiles-sounds-x64-msvc --prefix cataclysmbn-${{ inputs.version-label }} --config Release
           Compress-Archive -Force -Path cataclysmbn-${{ inputs.version-label }}/* -DestinationPath cbn-${{ matrix.artifact }}-${{ inputs.version-label }}.zip
 
